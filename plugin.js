@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.6.0";
+const VERSION = "0.6.1";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -914,13 +914,87 @@ function catalogoUrl(cat, page) {
   return p;
 }
 
-function catChips(label, labelEn, key, opciones, valor) {
-  return { type: "Column", gap: 4, children: [
-    { type: "Text", text: label, textEn: labelEn, style: "label", color: "muted", padding: 16 },
-    { type: "SingleChildScrollView", key: key + "Scroll", direction: "horizontal", padding: 16,
-      children: [{ type: "Chips", key: key, value: valor || "all", onChanged: { ui: CAT_OCUPADO, event: key },
-        options: opciones.map((o) => ({ value: o[0] || "all", label: o[1] })) }] },
-  ] };
+// Texto sin tildes ni mayúsculas, para que el buscador de la hoja de géneros no distinga «Acción» de «accion».
+function norm(t) {
+  return String(t || "").toLowerCase().replace(/[áàä]/g, "a").replace(/[éèë]/g, "e")
+    .replace(/[íìï]/g, "i").replace(/[óòö]/g, "o").replace(/[úùü]/g, "u").replace(/ñ/g, "n");
+}
+
+function etiquetaDe(opciones, valor) {
+  const o = opciones.find((x) => x[0] === (valor || ""));
+  return o ? o[1] : "";
+}
+
+// Un filtro es un botón con el valor elegido; al pulsarlo se abre una hoja con las opciones (la de géneros,
+// con buscador). Elegir una opción cierra la hoja y recarga con esqueletos.
+function filtroBoton(label, labelEn, sheetKey, opciones, valor) {
+  const activo = !!valor;
+  return { type: activo ? "ElevatedButton" : "TextButton", key: "btn-" + sheetKey, radius: "full",
+    icon: "expand_more", labelText: label + ": " + (etiquetaDe(opciones, valor) || "Todos"),
+    labelTextEn: labelEn + ": " + (etiquetaDe(opciones, valor) || "All"),
+    onPressed: { ui: [{ open: sheetKey }] } };
+}
+
+function filtroSheet(sheetKey, titulo, tituloEn, opciones, valor, evento, q) {
+  const buscando = q ? norm(q) : "";
+  const lista = opciones.filter((o) => !buscando || norm(o[1]).indexOf(buscando) >= 0);
+  const act = valor || "";
+  const filas = lista.map((o) => {
+    const fila = { type: "ListTile", key: sheetKey + "-" + (o[0] || "all"), dense: true, title: o[1],
+      onTap: { ui: [{ close: sheetKey }].concat(CAT_OCUPADO), event: evento, arg: o[0] || "all" } };
+    if (o[0] === act) fila.trailing = { type: "Icon", name: "check" };
+    return fila;
+  });
+  const hijos = [];
+  if (opciones.length > 8) hijos.push({ type: "TextField", key: "gq", kind: "search", value: q || "", padding: 8,
+    labelText: "Buscar género", labelTextEn: "Search genre", hintText: "P. ej. romance", hintEn: "e.g. romance",
+    onChanged: "gq" });
+  hijos.push(filas.length ? { type: "ListView", key: sheetKey + "-lista", items: filas }
+    : { type: "Text", text: "Ningún género coincide.", textEn: "No genre matches.", color: "muted", padding: 16 });
+  return { type: "BottomSheet", key: sheetKey, title: titulo, titleEn: tituloEn, children: hijos };
+}
+
+function catalogTree(c, state) {
+  const items = Array.isArray(c.items) ? c.items : [];
+  const total = parseInt(String(c.totalTxt || "").replace(/[^0-9]/g, ""), 10) || 0;
+  const hayMas = items.length < total && items.length < CAT_TOPE;
+  const q = state && typeof state.gq === "string" ? state.gq : "";
+  return {
+    type: "Scaffold",
+    appBar: { type: "AppBar", key: "barCatalog", mergeWithKinoBar: true, dense: true, title: "Catálogo · " + FUENTE,
+      leading: { type: "IconButton", key: "backFromCatalog", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "catBody", children: [{
+      type: "Column", gap: 8, children: [
+        { type: "Row", gap: 8, padding: 16, wrap: true, children: [
+          filtroBoton("Género", "Genre", "sheetGenero", GENEROS, c.genre),
+          filtroBoton("Tipo", "Type", "sheetTipo", TIPOS, c.type),
+          filtroBoton("Estado", "Status", "sheetEstado", ESTADOS, c.status),
+        ] },
+        c.totalTxt ? { type: "Text", text: c.totalTxt + " en el catálogo",
+          textEn: c.totalTxt + " in catalog", style: "caption", color: "muted", padding: 16 } : null,
+        esqueletosBusqueda("catSkel"),
+        { type: "Column", key: "catGrid", children: [
+          items.length ? gridOf(items, VACIO_SERIES) :
+            { type: "Text", text: "Sin resultados con estos filtros.",
+              textEn: "No results with these filters.", color: "muted", padding: 16 },
+          items.length >= CAT_TOPE && total > CAT_TOPE ?
+            { type: "Text", text: "Mostrando " + CAT_TOPE + " series: afina los filtros para ver otras.",
+              textEn: "Showing " + CAT_TOPE + " series: narrow the filters to see others.",
+              style: "caption", color: "muted", padding: 16 } : null,
+        ].filter(Boolean) },
+        hayMas ? { type: "Column", gap: 8, padding: 16, crossAxisAlignment: "center", children: [
+          { type: "ElevatedButton", key: "catMore", icon: "expand_more", radius: "full",
+            labelText: "Cargar más", labelTextEn: "Load more",
+            onPressed: { ui: [{ disable: "catMore" }, { show: "catSpin" }], event: "catMore" } },
+          { type: "CircularProgressIndicator", key: "catSpin", hidden: true },
+        ] } : null,
+        filtroSheet("sheetGenero", "Género", "Genre", GENEROS, c.genre, "catGenre", q),
+        filtroSheet("sheetTipo", "Tipo", "Type", TIPOS, c.type, "catType", ""),
+        filtroSheet("sheetEstado", "Estado", "Status", ESTADOS, c.status, "catStatus", ""),
+      ].filter(Boolean) }] },
+  };
 }
 
 function conListo(resp) { if (resp && typeof resp === "object") resp.ui = CAT_LISTO; return resp; }
@@ -1080,7 +1154,7 @@ export async function screen(ev) {
     if (route.name === "catalog") {
       const c = getJson("cat", null);
       if (!c || typeof c !== "object") return loadingTree("Cargando catálogo…");
-      return catalogTree(c);
+      return catalogTree(c, state);
     }
   } catch (e) {
     return errorTree("No se pudo cargar (" + ((e && e.code) || "error") + ").");
@@ -1138,7 +1212,8 @@ export async function screenEvent(ev) {
     if (name === "catGenre" || name === "catType" || name === "catStatus") {
       const c = getJson("cat", {}) || {};
       const nuevo = { genre: c.genre || "", type: c.type || "", status: c.status || "" };
-      const v = String(ev.value || "") === "all" ? "" : String(ev.value || "");
+      const crudo = String(ev.arg != null ? ev.arg : (ev.value || ""));
+      const v = crudo === "all" ? "" : crudo;
       if (name === "catGenre") nuevo.genre = v;
       else if (name === "catType") nuevo.type = v;
       else nuevo.status = v;
@@ -1196,6 +1271,7 @@ export async function screenEvent(ev) {
       if (resp.state) resp.state = Object.assign({}, serie.state, resp.state);
       return resp;
     }
+    if (name === "gq") return { state: { gq: String(ev.value || "").slice(0, 40) } };
     if (name === "cargarFilas") {
       await cargarFilasHome();
       return { state: { homeTk: Date.now() } };

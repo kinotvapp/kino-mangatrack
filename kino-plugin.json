@@ -1,6 +1,6 @@
 {"id":"mangatrack",
 "name":"MangaTrack",
-"version":"0.3.2",
+"version":"0.5.0",
 "creator":"Susejing",
 "description":"Lee mangas en español en tu TV o teléfono, con zoom y tres modos de lectura (fuente: LeerCapitulo).",
 "apiVersion":19,
@@ -13,4 +13,4 @@
   "i2.wp.com",
   "i3.wp.com",
   "*.t34798ndc.com"],
-"capabilities":["screen", "shared"],"debug":false,"screen":{"label":"MangaTrack","labelEn":"MangaTrack","menuOpens":"screen","opensFrom":["menu","settings"]}}
+"capabilities":["screen", "shared", "home"],"catalogOnly":true,"debug":false,"screen":{"label":"MangaTrack","labelEn":"MangaTrack","menuOpens":"screen","opensFrom":["menu","settings"]}}

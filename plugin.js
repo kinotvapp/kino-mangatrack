@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.2";
+const VERSION = "0.5.0";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -356,11 +356,6 @@ function serieKey(prefix, url) {
   return prefix + String(url).replace(/[^a-z0-9]/gi, "").slice(-40);
 }
 
-function twoLines(t) {
-  const s = String(t || "");
-  return s.length > 42 ? [s.slice(0, 40) + "…", s.slice(40, 80)] : [s];
-}
-
 function posterCard(it, prefix, rail) {
   const img = {
     type: "Image", url: it.poster || "", aspect: "2:3",
@@ -369,18 +364,19 @@ function posterCard(it, prefix, rail) {
       children: [{ type: "Icon", name: "list", color: "muted" }] },
   };
   if (rail) img.width = 120;
+  // Tarjeta tonal con esquinas redondeadas (la portada va recortada a ellas); el título ocupa siempre
+  // dos líneas de alto, así las tarjetas de una fila quedan iguales.
   return {
-    type: "Card", key: serieKey(prefix, it.url), flush: true,
+    type: "Card", key: serieKey(prefix, it.url), flush: true, variant: "filled", radius: "medium",
     onTap: { event: "openSeries", arg: it.url },
-    children: [img].concat(twoLines(it.title).map((ln) => (
-      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 }))),
+    children: [img, { type: "Text", text: String(it.title || ""), textEn: String(it.title || ""),
+      style: "label", maxLines: 2, padding: 8, minH: 48 }],
   };
 }
-
 function gridOf(items, vacio) {
   if (!items || !items.length) return vacio;
   return {
-    type: "ListView", key: "grid",
+    type: "ListView", key: "grid", gap: 12, padding: 12,
     columns: { compact: 3, medium: 4, expanded: 6 },
     items: items.map((it) => posterCard(it, "c-")),
   };
@@ -397,7 +393,7 @@ function railOf(titulo, tituloEn, items, key, prefix) {
     { type: "Text", text: titulo, textEn: tituloEn, style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: key, direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
-        children: items.slice(0, 20).map((it) => posterCard(it, prefix, true)) }] },
+        children: items.slice(0, 15).map((it) => posterCard(it, prefix, true)) }] },
   ];
 }
 
@@ -408,6 +404,88 @@ function fuenteCard(nombre, nota, activa) {
       { type: "Text", text: nombre, textEn: nombre, style: "h3", padding: 16 },
       { type: "Text", text: nota, textEn: nota, style: "caption", color: "muted", padding: 16 },
     ] };
+}
+
+// ---- Filas de categorías del Home: se piden en paralelo al abrir, se guardan 6 h y mientras
+// llegan se enseñan esqueletos. Cada fila trae «Ver todo», que abre el catálogo ya filtrado.
+const HOME_FILAS = [
+  { key: "accion", es: "Acción", en: "Action", q: { genre: "action" } },
+  { key: "romance", es: "Romance", en: "Romance", q: { genre: "romance" } },
+  { key: "comedia", es: "Comedia", en: "Comedy", q: { genre: "comedy" } },
+  { key: "fantasia", es: "Fantasía", en: "Fantasy", q: { genre: "fantasy" } },
+  { key: "aventura", es: "Aventura", en: "Adventure", q: { genre: "adventure" } },
+  { key: "isekai", es: "Isekai", en: "Isekai", q: { genre: "isekai" } },
+  { key: "manhwa", es: "Manhwa", en: "Manhwa", q: { type: "manhwa" } },
+  { key: "finalizados", es: "Finalizados", en: "Completed", q: { status: "completed" } },
+];
+const FILAS_TTL = 6 * 3600 * 1000;
+const FILA_CARTAS = 10;
+
+function filasCache() {
+  const c = getJson("filas", null);
+  return c && typeof c === "object" && c.rows && typeof c.rows === "object" ? c : { ts: 0, rows: {} };
+}
+
+// Pide las filas que faltan (todas si la caché caducó); true si algo cambió.
+async function cargarFilasHome() {
+  const c = filasCache();
+  const fresco = Date.now() - (c.ts || 0) < FILAS_TTL;
+  const faltan = HOME_FILAS.filter((f) => !fresco || !Array.isArray(c.rows[f.key]) || !c.rows[f.key].length);
+  if (!faltan.length) return false;
+  setJson("filasTry", Date.now());
+  const res = await Promise.all(faltan.map(async (f) => {
+    try { return [f.key, homeCards(await getHtml(catalogoUrl(f.q, 1)), FILA_CARTAS)]; }
+    catch (e) { log("fila " + f.key + ": " + ((e && e.message) || e)); return [f.key, null]; }
+  }));
+  let cambio = false;
+  for (const par of res) {
+    if (par[1] && par[1].length) { c.rows[par[0]] = par[1]; cambio = true; }
+  }
+  if (cambio) { c.ts = Date.now(); setJson("filas", c); }
+  setJson("filasTry", Date.now());
+  return cambio;
+}
+
+function filaHeader(f) {
+  return { type: "Row", padding: 16, crossAxisAlignment: "center", children: [
+    { type: "Text", text: f.es, textEn: f.en, style: "h3", flex: 1 },
+    { type: "TextButton", key: "ver-" + f.key, labelText: "Ver todo", labelTextEn: "See all",
+      onPressed: { event: "verFila", arg: f.key } },
+  ] };
+}
+
+function filaRail(f, items) {
+  return [
+    filaHeader(f),
+    { type: "SingleChildScrollView", key: "rail-" + f.key, direction: "horizontal", padding: 16,
+      children: [{ type: "Row", gap: 8,
+        children: items.slice(0, FILA_CARTAS).map((it) => posterCard(it, "g" + f.key + "-", true)) }] },
+  ];
+}
+
+function filaEsqueleto(f) {
+  const celda = (i) => ({ type: "Column", key: "sk-" + f.key + i, gap: 8, children: [
+    { type: "Skeleton", shape: "block", width: 120, height: 200 },
+    { type: "Skeleton", shape: "line", width: 96 },
+  ] });
+  return [
+    { type: "Text", text: f.es, textEn: f.en, style: "h3", padding: 16 },
+    { type: "SingleChildScrollView", key: "rail-" + f.key, direction: "horizontal", padding: 16,
+      children: [{ type: "Row", gap: 8, children: [0, 1, 2, 3].map(celda) }] },
+  ];
+}
+
+// Las filas de categoría del Home: las de la caché, y un esqueleto en las que aún no han llegado.
+function filasHome() {
+  const c = filasCache();
+  const intentando = Date.now() - (getJson("filasTry", 0) || 0) < 20000 || !getJson("filasTry", 0);
+  let out = [];
+  for (const f of HOME_FILAS) {
+    const items = c.rows[f.key];
+    if (Array.isArray(items) && items.length) out = out.concat(filaRail(f, items));
+    else if (intentando) out = out.concat(filaEsqueleto(f));
+  }
+  return out;
 }
 
 async function homeTree() {
@@ -424,8 +502,8 @@ async function homeTree() {
   let mixtas = [];
   if (posT >= 0 && posP > posT && posU > posP) {
     populares = homeCards(html.slice(posP, posU), 10)
-      .concat(homeCards(html.slice(posT, posP), 24));
-    recientes = homeCards(html.slice(posU), 24);
+      .concat(homeCards(html.slice(posT, posP), 24)).slice(0, 15);
+    recientes = homeCards(html.slice(posU), 24).slice(0, 15);
     const vp = {};
     populares = populares.filter((x) => (!vp[x.url] && (vp[x.url] = 1)));
     const vr = {};
@@ -439,7 +517,7 @@ async function homeTree() {
     { type: "Text", text: "Mis favoritos", textEn: "My favourites", style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: "railFavs", direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
-        children: mf.slice(0, 40).map((it) => posterCard(it, "f-", true)) }] },
+        children: mf.slice(0, 20).map((it) => posterCard(it, "f-", true)) }] },
   ] : [];
   const hh = hist();
   const hItems = Object.keys(hh).map((k) => ({ url: k, title: hh[k].title || "",
@@ -476,13 +554,14 @@ async function homeTree() {
   ];
   if (!populares.length && !recientes.length && !mixtas.length) return VACIO_SERIES;
   return { type: "SingleChildScrollView", key: "home", children: []
-    .concat(fuentes)
     .concat(railHist)
+    .concat(railFavs)
     .concat(railOf("Populares en español", "Popular in Spanish", populares, "railPop", "p-"))
     .concat(railOf("Actualizados recientes", "Recently updated", recientes, "railRec", "r-"))
-    .concat(railFavs)
+    .concat(filasHome())
     .concat(gridSeries)
-    .concat(catalogo) };
+    .concat(catalogo)
+    .concat(fuentes) };
 }
 
 function plural(n, uno, varios) { return n + " " + (n === 1 ? uno : varios); }
@@ -604,7 +683,7 @@ function detailTree(state) {
   }
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barDetail", mergeWithKinoBar: true, title: String(meta.title || "Serie").slice(0, 30),
+    appBar: { type: "AppBar", key: "barDetail", mergeWithKinoBar: true, dense: true, title: String(meta.title || "Serie").slice(0, 30),
       leading: { type: "IconButton", key: "backFromDetail", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
@@ -724,7 +803,7 @@ function readerTree(state) {
 
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barReader", mergeWithKinoBar: true, title: ch ? "Capítulo " + ch.num : "Leyendo",
+    appBar: { type: "AppBar", key: "barReader", mergeWithKinoBar: true, dense: true, title: ch ? "Capítulo " + ch.num : "Leyendo",
       titleEn: ch ? "Chapter " + ch.num : "Reading",
       leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
@@ -740,29 +819,38 @@ function readerTree(state) {
   };
 }
 
+// Cuadrícula de esqueletos con la forma de los resultados: se enseña al momento al buscar (una operación
+// local de Kino, sin llamar al plugin) y se oculta cuando llegan los resultados.
+function esqueletosBusqueda() {
+  const celda = (i) => ({ type: "Column", key: "sk" + i, gap: 8, children: [
+    { type: "Skeleton", shape: "block", height: 200 },
+    { type: "Skeleton", shape: "line", lines: 2 },
+  ] });
+  return { type: "Column", key: "buscando", hidden: true, padding: 12, children: [
+    { type: "GridView", columns: { compact: 3, medium: 4, expanded: 6 }, gap: 12,
+      children: [0, 1, 2, 3, 4, 5].map(celda) },
+  ] };
+}
+
+const BUSCAR = { ui: [{ show: "buscando" }, { hide: "resultados" }], event: "search" };
+
 function searchTree(state) {
   const q = typeof state.resultsQ === "string" ? state.resultsQ : "";
   const results = Array.isArray(state.results) ? state.results : null;
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barSearch", mergeWithKinoBar: true, title: "Buscar manga", titleEn: "Search manga",
+    appBar: { type: "AppBar", key: "barSearch", mergeWithKinoBar: true, dense: true, title: "Buscar manga", titleEn: "Search manga",
       leading: { type: "IconButton", key: "backFromSearch", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
     body: { type: "SingleChildScrollView", key: "searchBody", children: [{
       type: "Column", children: [
-        { type: "Form", key: "search", onSubmitted: { ui: [{ show: "buscando" }, { hide: "resultados" }], event: "search" }, gap: 8, padding: 16, children: [
-          { type: "TextField", key: "q", kind: "search", value: q,
-            labelText: "Título", labelTextEn: "Title",
-            hintText: "P. ej. one piece", hintEn: "e.g. one piece",
-            required: true },
-          { type: "ElevatedButton", icon: "search", labelText: "Buscar", labelTextEn: "Search",
-            submit: true },
-        ] },
-        { type: "Column", key: "buscando", hidden: true, padding: 32, gap: 12, crossAxisAlignment: "center", children: [
-          { type: "CircularProgressIndicator" },
-          { type: "Text", text: "Buscando…", textEn: "Searching…", color: "muted" },
-        ] },
+        { type: "TextField", key: "q", kind: "search", value: q, padding: 16, autofocus: true,
+          labelText: "Buscar manga", labelTextEn: "Search manga",
+          hintText: "P. ej. one piece", hintEn: "e.g. one piece",
+          trailingIcon: "search", trailingLabel: "Buscar", trailingLabelEn: "Search",
+          onSubmitted: BUSCAR, onTrailingTap: BUSCAR },
+        esqueletosBusqueda(),
         { type: "Column", key: "resultados", children: [
           results
             ? (results.length ? gridOf(results, VACIO_BUSQUEDA) : VACIO_BUSQUEDA)
@@ -774,18 +862,6 @@ function searchTree(state) {
   };
 }
 
-// ------------------------------------------------------------- los exports
-
-// ------------------------------------------------- catálogo completo
-// La página /manga/ del sitio lista TODO el catálogo con filtros
-// (?genre=, ?type=, ?status=) y paginación (?page=, 30 series por
-// página). Slugs verificados contra el sitio el 1 nov 2026: genre:
-// action, adventure, comedy, drama, fantasy, horror, isekai, josei,
-// mecha, mystery, psychological, romance, sci-fi, seinen, shoujo,
-// shounen, slice-of-life — type: manga, manhwa, manhua — status:
-// ongoing, completed. El catálogo tiene 28.312 series: la cuadrícula
-// se limita a CAT_TOPE tarjetas porque Kino admite 600 nodos por
-// pantalla y cada tarjeta son 5 o 6 nodos.
 const GENEROS = [
   ["", "Todos los géneros"],
   ["action", "Acción"], ["adventure", "Aventura"], ["comedy", "Comedia"],
@@ -820,7 +896,7 @@ function catalogTree(c) {
   const hayMas = items.length < total && items.length < CAT_TOPE;
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barCatalog", mergeWithKinoBar: true, title: "Catálogo · " + FUENTE,
+    appBar: { type: "AppBar", key: "barCatalog", mergeWithKinoBar: true, dense: true, title: "Catálogo · " + FUENTE,
       leading: { type: "IconButton", key: "backFromCatalog", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
@@ -884,6 +960,42 @@ function routeUrl(r) {
   return String((r.params && r.params.url) || (r.args && r.args.url) || r.url || "");
 }
 
+// ---- El Home general de Kino: filas de mangas. Kino las enseña tras las suyas con el nombre del plugin
+// y las guarda 6 h. Cada ítem abre directamente la pantalla de la serie dentro de este plugin
+// (`open.screen`), no la ficha de un título; el tipo es «movie» porque la ficha de «series» exigiría `episodes`.
+function itemHome(it) {
+  const m = /^[/]manga[/]([a-z0-9]{4,})[/]([a-z0-9-]+)[/]$/i.exec(String((it && it.url) || ""));
+  if (!m || !it.title) return null;
+  const item = { id: (m[2] + "-" + m[1]).slice(0, 128), ref: it.url, title: String(it.title).slice(0, 200),
+    kind: "movie", badges: ["Manga"],
+    open: { screen: { route: "detail", args: { url: it.url } } } };
+  if (it.poster) item.poster = it.poster;
+  return item;
+}
+
+export async function home() {
+  const rows = [];
+  const fila = (id, title, items) => {
+    const seen = {};
+    const list = items.map(itemHome).filter((x) => x && !seen[x.id] && (seen[x.id] = 1)).slice(0, 30);
+    if (list.length) rows.push({ id: id, title: title, items: list });
+  };
+  const hh = hist();
+  fila("manga-seguir", "Seguir leyendo manga", Object.keys(hh)
+    .map((k) => ({ url: k, title: hh[k].title || "", poster: hh[k].poster || "", ts: hh[k].ts || 0 }))
+    .filter((x) => x.title).sort((a, b) => b.ts - a.ts).slice(0, 15));
+  fila("manga-favoritos", "Mis mangas favoritos", favs().slice(0, 20));
+  const html = await getHtml("/");
+  const posT = html.search(/tendencias/i), posP = html.search(/populares/i), posU = html.search(/ultimos\s+mangas/i);
+  if (posT >= 0 && posP > posT && posU > posP) {
+    fila("manga-populares", "Mangas populares", homeCards(html.slice(posP, posU), 12).concat(homeCards(html.slice(posT, posP), 18)));
+    fila("manga-recientes", "Mangas actualizados", homeCards(html.slice(posU), 30));
+  } else {
+    fila("manga-series", "Mangas", homeCards(html, 30));
+  }
+  return rows;
+}
+
 export async function screen(ev) {
   const state = (ev && ev.state) || {};
   const route = (ev && ev.route) || { name: "home" };
@@ -906,7 +1018,7 @@ export async function screen(ev) {
   const body = await homeTree();
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barHome", mergeWithKinoBar: true, title: "MangaTrack",
+    appBar: { type: "AppBar", key: "barHome", mergeWithKinoBar: true, dense: true, title: "MangaTrack",
       leading: { type: "IconButton", key: "closeHome", icon: "close",
         labelText: "Cerrar", labelTextEn: "Close", onPressed: { close: true } },
       actions: [
@@ -936,6 +1048,9 @@ export async function screenEvent(ev) {
       if (r.name === "catalog") {
         const c = getJson("cat", null);
         if (!c || typeof c !== "object") return await cargarCatalogo({ genre: "", type: "", status: "" }, 1, false);
+      }
+      if (!r.name || r.name === "home") {
+        return (await cargarFilasHome()) ? { state: { homeTk: Date.now() } } : null;
       }
       return null;
     }
@@ -1010,13 +1125,18 @@ export async function screenEvent(ev) {
       return resp;
     }
     if (name === "search") {
-      const q = String((ev.value && ev.value.q) || "").trim();
+      const q = String(typeof ev.value === "string" ? ev.value : (ev.value && ev.value.q) || "").trim();
       const listo = [{ hide: "buscando" }, { show: "resultados" }];
       if (!q) return { toast: "Escribe un título.", ui: listo };
       const html = await getHtml("/?s=" + encodeURIComponent(q));
       const results = homeCards(html, 30);
       return { state: { results: results, resultsQ: q }, ui: listo,
         toast: results.length ? results.length + " resultados" : "Sin resultados" };
+    }
+    if (name === "verFila") {
+      const f = HOME_FILAS.find((x) => x.key === String(ev.arg || ""));
+      if (!f) return null;
+      return await cargarCatalogo({ genre: f.q.genre || "", type: f.q.type || "", status: f.q.status || "" }, 1, true);
     }
     if (name === "toggleDesc") return { state: { descOpen: !(state.descOpen === true) } };
     if (name === "toggleOrden") {

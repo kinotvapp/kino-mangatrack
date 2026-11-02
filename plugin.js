@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -751,7 +751,7 @@ function searchTree(state) {
       actions: [] },
     body: { type: "SingleChildScrollView", key: "searchBody", children: [{
       type: "Column", children: [
-        { type: "Form", key: "search", onSubmitted: "search", gap: 8, padding: 16, children: [
+        { type: "Form", key: "search", onSubmitted: { ui: [{ show: "buscando" }, { hide: "resultados" }], event: "search" }, gap: 8, padding: 16, children: [
           { type: "TextField", key: "q", kind: "search", value: q,
             labelText: "Título", labelTextEn: "Title",
             hintText: "P. ej. one piece", hintEn: "e.g. one piece",
@@ -759,10 +759,16 @@ function searchTree(state) {
           { type: "ElevatedButton", icon: "search", labelText: "Buscar", labelTextEn: "Search",
             submit: true },
         ] },
-        results
-          ? (results.length ? gridOf(results, VACIO_BUSQUEDA) : VACIO_BUSQUEDA)
-          : { type: "Text", text: "Escribe un título y pulsa Buscar.",
-              textEn: "Type a title and press Search.", color: "muted", padding: 16 },
+        { type: "Column", key: "buscando", hidden: true, padding: 32, gap: 12, crossAxisAlignment: "center", children: [
+          { type: "CircularProgressIndicator" },
+          { type: "Text", text: "Buscando…", textEn: "Searching…", color: "muted" },
+        ] },
+        { type: "Column", key: "resultados", children: [
+          results
+            ? (results.length ? gridOf(results, VACIO_BUSQUEDA) : VACIO_BUSQUEDA)
+            : { type: "Text", text: "Escribe un título y pulsa Buscar.",
+                textEn: "Type a title and press Search.", color: "muted", padding: 16 },
+        ] },
       ] },
     ] },
   };
@@ -1005,10 +1011,11 @@ export async function screenEvent(ev) {
     }
     if (name === "search") {
       const q = String((ev.value && ev.value.q) || "").trim();
-      if (!q) return { toast: "Escribe un título." };
+      const listo = [{ hide: "buscando" }, { show: "resultados" }];
+      if (!q) return { toast: "Escribe un título.", ui: listo };
       const html = await getHtml("/?s=" + encodeURIComponent(q));
       const results = homeCards(html, 30);
-      return { state: { results: results, resultsQ: q },
+      return { state: { results: results, resultsQ: q }, ui: listo,
         toast: results.length ? results.length + " resultados" : "Sin resultados" };
     }
     if (name === "toggleDesc") return { state: { descOpen: !(state.descOpen === true) } };
@@ -1060,7 +1067,10 @@ export async function screenEvent(ev) {
     return null;
   } catch (e) {
     log("error en evento " + name + ": " + ((e && e.message) || e));
-    return { toast: "Algo falló (" + ((e && e.code) || "error") + ")." };
+    const fallo = { toast: "Algo falló (" + ((e && e.code) || "error") + ")." };
+    // Una búsqueda que falla no deja el indicador de carga puesto.
+    if (name === "search") fallo.ui = [{ hide: "buscando" }, { show: "resultados" }];
+    return fallo;
   }
 }
 

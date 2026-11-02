@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.6.1";
+const VERSION = "0.6.2";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -998,43 +998,6 @@ function catalogTree(c, state) {
 }
 
 function conListo(resp) { if (resp && typeof resp === "object") resp.ui = CAT_LISTO; return resp; }
-
-function catalogTree(c) {
-  const items = Array.isArray(c.items) ? c.items : [];
-  const total = parseInt(String(c.totalTxt || "").replace(/[^0-9]/g, ""), 10) || 0;
-  const hayMas = items.length < total && items.length < CAT_TOPE;
-  return {
-    type: "Scaffold",
-    appBar: { type: "AppBar", key: "barCatalog", mergeWithKinoBar: true, dense: true, title: "Catálogo · " + FUENTE,
-      leading: { type: "IconButton", key: "backFromCatalog", icon: "arrow_back",
-        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
-      actions: [] },
-    body: { type: "SingleChildScrollView", key: "catBody", children: [{
-      type: "Column", gap: 8, children: [
-        catChips("Género", "Genre", "catGenre", GENEROS, c.genre),
-        catChips("Tipo", "Type", "catType", TIPOS, c.type),
-        catChips("Estado", "Status", "catStatus", ESTADOS, c.status),
-        c.totalTxt ? { type: "Text", text: c.totalTxt + " en el catálogo",
-          textEn: c.totalTxt + " in catalog", style: "caption", color: "muted", padding: 16 } : null,
-        esqueletosBusqueda("catSkel"),
-        { type: "Column", key: "catGrid", children: [
-          items.length ? gridOf(items, VACIO_SERIES) :
-            { type: "Text", text: "Sin resultados con estos filtros.",
-              textEn: "No results with these filters.", color: "muted", padding: 16 },
-          items.length >= CAT_TOPE && total > CAT_TOPE ?
-            { type: "Text", text: "Mostrando " + CAT_TOPE + " series: afina los filtros para ver otras.",
-              textEn: "Showing " + CAT_TOPE + " series: narrow the filters to see others.",
-              style: "caption", color: "muted", padding: 16 } : null,
-        ].filter(Boolean) },
-        hayMas ? { type: "Column", gap: 8, padding: 16, crossAxisAlignment: "center", children: [
-          { type: "ElevatedButton", key: "catMore", icon: "expand_more", radius: "full",
-            labelText: "Cargar más", labelTextEn: "Load more",
-            onPressed: { ui: [{ disable: "catMore" }, { show: "catSpin" }], event: "catMore" } },
-          { type: "CircularProgressIndicator", key: "catSpin", hidden: true },
-        ] } : null,
-      ].filter(Boolean) }] },
-  };
-}
 
 // Carga una página del catálogo con los filtros pedidos y la deja en
 // kino.storage ("cat"); la respuesta solo avisa del cambio (catTk)

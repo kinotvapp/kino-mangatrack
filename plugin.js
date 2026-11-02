@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.6.2";
+const VERSION = "0.7.0";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -408,6 +408,37 @@ function fuenteCard(nombre, nota, activa) {
     ] };
 }
 
+// ---- Carrusel de tendencias (PageView con viewportFraction < 1): una tarjeta por título, la siguiente asoma a
+// un lado y pasa sola cada 5 s. Seis páginas (el límite es 24, pero cada una gasta nodos de los 600 de la pantalla).
+const CARRUSEL_PAGINAS = 6;
+
+function paginaCarrusel(it, i) {
+  const portada = { type: "Card", flush: true, radius: "medium", elevation: 6, children: [
+    { type: "Image", url: it.poster || "", width: 120, aspect: "2:3", alt: it.title, altEn: it.title,
+      fallback: { type: "Icon", name: "list", color: "muted" } } ] };
+  return { type: "Card", key: "car-" + i, variant: "filled", radius: "large", margin: 8,
+    onTap: { event: "openSeries", arg: it.url },
+    children: [{ type: "Row", gap: 16, padding: 16, crossAxisAlignment: "center", children: [
+      portada,
+      { type: "Column", gap: 8, flex: 1, crossAxisAlignment: "start", children: [
+        { type: "Badge", text: "#" + (i + 1) + " en tendencias", color: "primary" },
+        { type: "Text", text: String(it.title || ""), textEn: String(it.title || ""), style: "h3", maxLines: 3 },
+        { type: "ElevatedButton", key: "carv-" + i, icon: "play", radius: "full",
+          labelText: "Ver serie", labelTextEn: "See series", onPressed: { event: "openSeries", arg: it.url } },
+      ] },
+    ] }] };
+}
+
+function carruselHome(items) {
+  const lista = (items || []).filter((x) => x && x.url && x.title && x.poster).slice(0, CARRUSEL_PAGINAS);
+  if (lista.length < 2) return [];
+  return [
+    { type: "Text", text: "Tendencias", textEn: "Trending", style: "h3", padding: 16 },
+    { type: "PageView", key: "carrusel", viewportFraction: { compact: 0.9, medium: 0.6, expanded: 0.42 },
+      padEnds: false, autoPlayMs: 5000, children: lista.map(paginaCarrusel) },
+  ];
+}
+
 // ---- Filas de categorías del Home: se piden en paralelo al abrir, se guardan 6 h y mientras
 // llegan se enseñan esqueletos. Cada fila trae «Ver todo», que abre el catálogo ya filtrado.
 const HOME_FILAS = [
@@ -421,7 +452,7 @@ const HOME_FILAS = [
   { key: "finalizados", es: "Finalizados", en: "Completed", q: { status: "completed" } },
 ];
 const FILAS_TTL = 6 * 3600 * 1000;
-const FILA_CARTAS = 8;
+const FILA_CARTAS = 6;
 
 function filasCache() {
   const c = getJson("filas", null);
@@ -511,10 +542,12 @@ async function homeTree() {
   let populares = [];
   let recientes = [];
   let mixtas = [];
+  let tendencias = [];
   if (posT >= 0 && posP > posT && posU > posP) {
     populares = homeCards(html.slice(posP, posU), 10)
       .concat(homeCards(html.slice(posT, posP), 24)).slice(0, 15);
     recientes = homeCards(html.slice(posU), 24).slice(0, 15);
+    tendencias = homeCards(html.slice(posT, posP), 24);
     const vp = {};
     populares = populares.filter((x) => (!vp[x.url] && (vp[x.url] = 1)));
     const vr = {};
@@ -523,17 +556,18 @@ async function homeTree() {
     mixtas = homeCards(html, 40);
   }
   if (!populares.length && !recientes.length && !mixtas.length) mixtas = homeCards(html, 40);
+  if (!tendencias.length) tendencias = (populares.length ? populares : mixtas).slice();
   const mf = favs();
   const railFavs = mf.length ? [
     { type: "Text", text: "Mis favoritos", textEn: "My favourites", style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: "railFavs", direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
-        children: mf.slice(0, 20).map((it) => posterCard(it, "f-", true)) }] },
+        children: mf.slice(0, 12).map((it) => posterCard(it, "f-", true)) }] },
   ] : [];
   const hh = hist();
   const hItems = Object.keys(hh).map((k) => ({ url: k, title: hh[k].title || "",
       poster: hh[k].poster || "", ts: hh[k].ts || 0 }))
-    .filter((x) => x.title).sort((a, b) => b.ts - a.ts).slice(0, 10);
+    .filter((x) => x.title).sort((a, b) => b.ts - a.ts).slice(0, 8);
   const railHist = hItems.length ? [
     { type: "Text", text: "Seguir leyendo", textEn: "Keep reading", style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: "railHist", direction: "horizontal", padding: 16,
@@ -581,6 +615,7 @@ async function homeTree() {
   }] : [];
   return { type: "SingleChildScrollView", key: "home", children: []
     .concat(hero)
+    .concat(carruselHome(tendencias))
     .concat(railHist)
     .concat(railFavs)
     .concat(railOf("Populares en español", "Popular in Spanish", populares, "railPop", "p-"))

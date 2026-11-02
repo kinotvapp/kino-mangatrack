@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -167,7 +167,23 @@ function seriesMeta(html) {
     pick(/property=["']og:description["'][^>]*content=["']([^"']+)["']/i) ||
     pick(/content=["']([^"']+)["'][^>]*property=["']og:description["']/i) ||
     pick(/name=["']description["'][^>]*content=["']([^"']+)["']/i);
-  return { title: titulo, poster: poster, overview: overview };
+  // Datos de la ficha (lista «lc-facts»): estado, tipo, autor y última actualización; y las
+  // etiquetas de la propia serie (géneros y temáticas), que son las que van antes de esa lista.
+  const fact = (k) => {
+    const m = html.match(new RegExp('<li><span class="k">' + k + '</span>(?:<a[^>]*>|<span>)([^<]{1,80})'));
+    return m ? clean(m[1]) : "";
+  };
+  const estados = { ongoing: "En emisión", completed: "Finalizado", hiatus: "En pausa", cancelled: "Cancelado" };
+  const st = fact("Estado");
+  const idx = html.indexOf('class="lc-facts');
+  const zona = idx > 0 ? html.slice(Math.max(0, idx - 6000), idx) : "";
+  const tags = [];
+  const reTag = /<a[^>]*class="[^"]*badge[^"]*"[^>]*href="[/]manga[/][?](?:genre|theme)=[^"]*"[^>]*>([^<]{1,40})<[/]a>/g;
+  let mt;
+  while ((mt = reTag.exec(zona)) !== null && tags.length < 8) tags.push(clean(mt[1]));
+  return { title: titulo, poster: poster, overview: overview,
+    status: estados[st.toLowerCase()] || st, type: fact("Tipo"), author: fact("Autor").replace(/\s*\([^)]*\)/g, "").slice(0, 60),
+    updated: fact("Actualizado"), tags: tags };
 }
 
 // ------------------------------------------------ favoritos (kino.storage)
@@ -469,6 +485,11 @@ async function homeTree() {
     .concat(catalogo) };
 }
 
+function plural(n, uno, varios) { return n + " " + (n === 1 ? uno : varios); }
+
+// Orden de la lista de capítulos: los más recientes primero (lo habitual en un lector).
+function orden() { return getJson("ord", "desc") === "asc" ? "asc" : "desc"; }
+
 function detailTree(state) {
   const d = state.detail;
   if (!d) return loadingTree("Cargando serie…");
@@ -485,57 +506,101 @@ function detailTree(state) {
         onPressed: { event: "popBack" } },
     ] };
   }
+  const fav = isFav(d.url);
+  const asc = orden() === "asc";
+
+  // Portada pequeña al lado de los datos (en una fila, también en el teléfono).
   const cover = meta.poster
-    ? { type: "Image", url: meta.poster, width: { compact: 120, expanded: 160 },
-        aspect: "2:3", alt: meta.title, fallback: { type: "Icon", name: "list" } }
+    ? { type: "Card", variant: "plain", flush: true, elevation: 6, radius: "medium", children: [
+        { type: "Image", url: meta.poster, width: { compact: 96, medium: 120, expanded: 160 },
+          aspect: "2:3", alt: meta.title, fallback: { type: "Icon", name: "list" } } ] }
     : { type: "Icon", name: "list" };
-  const head = {
-    type: "Row", gap: 16, padding: 16, crossAxisAlignment: "start", stackOnNarrow: true,
-    children: [
+  const quien = [meta.type, meta.status].filter(Boolean).join(" · ");
+  const total = meta.totalCaps > chapters.length ? meta.totalCaps : chapters.length;
+  const datos = [
+    { type: "Text", text: meta.title || d.url, style: "h2", maxLines: 3 },
+    quien ? { type: "Text", text: quien, style: "label", color: "muted" } : null,
+    meta.author ? { type: "Text", text: meta.author, style: "caption", color: "muted", maxLines: 1 } : null,
+    { type: "Text", text: plural(total, "capítulo", "capítulos") + (meta.updated ? " · act. " + meta.updated : ""),
+      textEn: plural(total, "chapter", "chapters") + (meta.updated ? " · upd. " + meta.updated : ""),
+      style: "caption", color: "muted" },
+  ].filter(Boolean);
+
+  const etiquetas = (meta.tags || []).slice(0, 6).map((t) => ({ type: "Badge", text: String(t).slice(0, 14), color: "secondary" }));
+
+  const principal = hIdx >= 0
+    ? { type: "ElevatedButton", key: "continuar", icon: "play", flex: 1, radius: "full",
+        labelText: "Continuar · cap. " + chapters[hIdx].num, labelTextEn: "Continue · ch. " + chapters[hIdx].num,
+        onPressed: { event: "read", arg: String(hIdx) } }
+    : { type: "ElevatedButton", key: "start", icon: "play", flex: 1, radius: "full",
+        labelText: "Empezar a leer", labelTextEn: "Start reading",
+        onPressed: { event: "read", arg: "0" } };
+  const acciones = { type: "Row", gap: 8, crossAxisAlignment: "center", children: [
+    principal,
+    { type: "IconButton", key: "fav", icon: fav ? "heart" : "star",
+      labelText: fav ? "Quitar de favoritos" : "Añadir a favoritos",
+      labelTextEn: fav ? "Remove favourite" : "Add favourite", onPressed: "fav" },
+  ] };
+  const ultimo = chapters.length > 1
+    ? { type: "TextButton", key: "latest", icon: "expand_more",
+        labelText: "Leer el último (cap. " + chapters[chapters.length - 1].num + ")",
+        labelTextEn: "Read the latest (ch. " + chapters[chapters.length - 1].num + ")",
+        onPressed: { event: "read", arg: String(chapters.length - 1) } }
+    : null;
+
+  // Sinopsis recortada a 4 líneas con «Ver más» (si es larga).
+  const sinopsis = meta.overview ? String(meta.overview).slice(0, 1500) : "";
+  const abierta = state.descOpen === true;
+  const sinopsisNodes = sinopsis ? [
+    { type: "Text", text: sinopsis, style: "p", color: "muted", maxLines: abierta ? undefined : 4 },
+    sinopsis.length > 220
+      ? { type: "TextButton", key: "verMas", labelText: abierta ? "Ver menos" : "Ver más",
+          labelTextEn: abierta ? "Show less" : "Show more", onPressed: "toggleDesc" }
+      : null,
+  ].filter(Boolean) : [];
+
+  const panel = { type: "Column", gap: 12, children: [
+    { type: "Row", gap: 16, crossAxisAlignment: "start", children: [
       cover,
-      { type: "Column", gap: 6, flex: 2, crossAxisAlignment: "start", children: [
-        { type: "Text", text: meta.title || d.url, style: "h2" },
-        { type: "Text", text: chapters.length + " capítulos",
-          textEn: chapters.length + " chapters", color: "muted", style: "caption" },
-        meta.overview ? { type: "Text", text: meta.overview.slice(0, 1500), style: "p", color: "muted" } : null,
-        {
-          type: "Row", gap: 8, wrap: true, children: [
-            { type: "ElevatedButton", key: "start", icon: "play",
-              labelText: "Empezar a leer", labelTextEn: "Start reading",
-              onPressed: { event: "read", arg: "0" } },
-            { type: "ElevatedButton", key: "latest", icon: "expand_more",
-              labelText: "Leer lo último", labelTextEn: "Read latest",
-              onPressed: { event: "read", arg: String(chapters.length - 1) } },
-            { type: "ElevatedButton", key: "continuar", icon: "play_arrow",
-              labelText: hIdx >= 0 ? "Continuar: cap. " + chapters[hIdx].num : "Continuar",
-              labelTextEn: hIdx >= 0 ? "Continue: ch. " + chapters[hIdx].num : "Continue",
-              onPressed: { event: "read", arg: String(hIdx) },
-              enabled: hIdx >= 0, hidden: hIdx < 0 },
-            { type: "ElevatedButton", key: "fav", icon: isFav(d.url) ? "heart" : "star",
-              labelText: isFav(d.url) ? "Quitar de favoritos" : "Añadir a favoritos",
-              labelTextEn: isFav(d.url) ? "Remove favourite" : "Add favourite",
-              onPressed: "fav" },
-          ],
-        },
-      ].filter(Boolean) },
-    ],
-  };
-  // Lista única estilo Yuri Online: un ListView con head + contador + un
-  // ListTile por capítulo (1 nodo por capítulo). La lista vieja usaba
-  // Card+Text (2 nodos por capítulo): con series largas superaba los 600
-  // nodos que Kino admite por pantalla y la descartaba entera (pantalla negra).
-  const items = [head];
+      { type: "Column", gap: 4, flex: 1, crossAxisAlignment: "start", children: datos },
+    ] },
+    etiquetas.length ? { type: "Row", gap: 4, wrap: true, children: etiquetas } : null,
+    acciones,
+    ultimo,
+  ].concat(sinopsisNodes).filter(Boolean) };
+  // Todo el encabezado en una tarjeta con relleno, con margen y esquinas grandes.
+  const head = { type: "Card", variant: "filled", radius: "large", margin: 16, children: [panel] };
+
+  // Cabecera de la lista: contador y orden. Un ListTile por capítulo (1 nodo cada uno): con series
+  // largas, dos nodos por capítulo superaban los 600 que Kino admite por pantalla.
   const totalTxt = meta.totalCaps > chapters.length
-    ? chapters.length + " capítulos (de " + meta.totalCaps + " — los más recientes)"
-    : chapters.length + " capítulos";
-  items.push({ type: "Text", text: totalTxt,
-    textEn: chapters.length + " chapters", style: "h3", padding: 16 });
-  for (let i = 0; i < chapters.length; i++) {
-    items.push({
+    ? plural(chapters.length, "capítulo", "capítulos") + " (de " + meta.totalCaps + ": los más recientes)"
+    : plural(chapters.length, "capítulo", "capítulos");
+  const items = [
+    head,
+    { type: "Row", gap: 8, padding: 16, crossAxisAlignment: "center", children: [
+      { type: "Text", text: totalTxt, textEn: plural(chapters.length, "chapter", "chapters"), style: "h3", flex: 1 },
+      { type: "TextButton", key: "orden", icon: "filter_list",
+        labelText: asc ? "Más antiguos primero" : "Más recientes primero",
+        labelTextEn: asc ? "Oldest first" : "Newest first", onPressed: "toggleOrden" },
+    ] },
+  ];
+  const ids = chapters.map((c, i) => i);
+  if (!asc) ids.reverse();
+  for (const i of ids) {
+    const leido = hIdx >= 0 && i < hIdx;
+    const actual = i === hIdx;
+    const row = {
       type: "ListTile", key: "cap" + i, dense: true,
-      title: "Capítulo " + chapters[i].num + (hIdx >= 0 && i <= hIdx ? " ✓" : ""),
+      title: (leido ? "✓ " : "") + "Capítulo " + chapters[i].num,
+      titleEn: (leido ? "✓ " : "") + "Chapter " + chapters[i].num,
       onTap: { event: "read", arg: String(i) },
-    });
+    };
+    if (actual) {
+      row.subtitle = hInfo && hInfo.page > 0 ? "Donde te quedaste · pág. " + (hInfo.page + 1) : "Donde te quedaste";
+      row.subtitleEn = hInfo && hInfo.page > 0 ? "Where you left off · p. " + (hInfo.page + 1) : "Where you left off";
+    }
+    items.push(row);
   }
   return {
     type: "Scaffold",
@@ -945,6 +1010,11 @@ export async function screenEvent(ev) {
       const results = homeCards(html, 30);
       return { state: { results: results, resultsQ: q },
         toast: results.length ? results.length + " resultados" : "Sin resultados" };
+    }
+    if (name === "toggleDesc") return { state: { descOpen: !(state.descOpen === true) } };
+    if (name === "toggleOrden") {
+      setJson("ord", orden() === "asc" ? "desc" : "asc");
+      return { state: { ordTk: Date.now() } };
     }
     if (name === "cycleMode") {
       const c = cfg();

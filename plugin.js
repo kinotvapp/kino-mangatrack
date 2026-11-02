@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -642,15 +642,19 @@ function readerTree(state) {
       children: paginas, onPageChanged: "pageChanged" };
   }
 
-  const barra = { type: "Row", key: "barraLector", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
-    { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
-      onPressed: "prevChap", enabled: hasPrev },
+  // Los botones van en una fila y el selector de capítulo en su propia línea, a todo el ancho:
+  // junto a ellos, en un teléfono, se quedaba sin sitio y solo asomaba "..".
+  const barra = { type: "Column", key: "barraLector", gap: 8, padding: 16, children: [
+    { type: "Row", gap: 12, mainAxisAlignment: "center", children: [
+      { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
+        onPressed: "prevChap", enabled: hasPrev },
+      { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
+        labelTextEn: hasNext ? "Next" : "Last chapter",
+        icon: "arrow_forward", onPressed: "nextChap", enabled: hasNext },
+    ] },
     { type: "DropdownButton", key: "jumpChap", labelText: "Ir a capítulo", labelTextEn: "Go to chapter",
       value: String(idx), onChanged: "jumpChap",
       options: chapters.length ? chapters.map((c, i) => ({ value: String(i), label: "Capítulo " + c.num })) : [{ value: "0", label: "—" }] },
-    { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
-      labelTextEn: hasNext ? "Next" : "Last chapter",
-      icon: "arrow_forward", onPressed: "nextChap", enabled: hasNext },
   ] };
 
   return {

@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.7.0";
+const VERSION = "0.7.1";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -1073,14 +1073,15 @@ function routeUrl(r) {
 }
 
 // ---- El Home general de Kino: filas de mangas. Kino las enseña tras las suyas con el nombre del plugin
-// y las guarda 6 h. Cada ítem abre directamente la pantalla de la serie dentro de este plugin
-// (`open.screen`), no la ficha de un título; el tipo es «movie» porque la ficha de «series» exigiría `episodes`.
+// y las guarda 6 h. Cada ítem abre la pantalla de este plugin (`open.screen`), no la ficha de un título: la portada
+// del plugin con la serie empujada encima (así «volver» lleva a la portada, no cierra todo). El tipo es «movie»
+// porque la ficha de «series» exigiría `episodes`.
 function itemHome(it) {
   const m = /^[/]manga[/]([a-z0-9]{4,})[/]([a-z0-9-]+)[/]$/i.exec(String((it && it.url) || ""));
   if (!m || !it.title) return null;
   const item = { id: (m[2] + "-" + m[1]).slice(0, 128), ref: it.url, title: String(it.title).slice(0, 200),
     kind: "movie", badges: ["Manga"],
-    open: { screen: { route: "detail", args: { url: it.url } } } };
+    open: { screen: { args: { open: it.url } } } };
   if (it.poster) item.poster = it.poster;
   return item;
 }
@@ -1181,6 +1182,10 @@ export async function screenEvent(ev) {
       syncPullHist();
       syncPullCfg();
       const r = ev.route || {};
+      const args = r.args && typeof r.args === "object" ? r.args : {};
+      if (typeof args.open === "string" && /^[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/]$/i.test(args.open)) {
+        return await cargarSerie(args.open, true);
+      }
       if (r.name === "detail") {
         const url = routeUrl(r);
         if (url && /^[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/]$/i.test(url) &&
@@ -1192,7 +1197,7 @@ export async function screenEvent(ev) {
         const c = getJson("cat", null);
         if (!c || typeof c !== "object") return await cargarCatalogo({ genre: "", type: "", status: "" }, 1, false);
       }
-      if (!r.name || r.name === "home") {
+      if (!r.name || r.name === "home" || r.name === "main") {
         return (await cargarFilasHome()) ? { state: { homeTk: Date.now() } } : null;
       }
       return null;

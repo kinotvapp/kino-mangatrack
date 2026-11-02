@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.16";
+const VERSION = "0.2.0";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -248,6 +248,8 @@ function syncPullHist() {
     const l = local[k];
     if (l && (l.ts || 0) >= (v.ts || 0)) continue;
     local[k] = { url: v.url, num: String(v.num || "").slice(0, 12), idx: v.idx, ts: v.ts || 0,
+      page: typeof v.page === "number" && v.page >= 0 && v.page < 1000 ? Math.floor(v.page) : 0,
+      pos: typeof v.pos === "number" && v.pos >= 0 && v.pos <= 1 ? v.pos : 0,
       title: String(v.title || "").slice(0, 200),
       poster: typeof v.poster === "string" ? v.poster.slice(0, 500) : "" };
     changed = true;
@@ -314,146 +316,6 @@ function imgsDe(zona) {
     out.push(w > 0 && h > 0 ? { url: src, w: w, h: h } : { url: src });
   }
   return out;
-}
-
-// --------------------------------------- dimensiones de las páginas
-// El Image de Kino no tiene modo «ajustar»: SIEMPRE rellena su caja
-// recortando lo que sobre (cover), con o sin width/height (la 0.1.8
-// dejaba las páginas sin caja y Kino ponía una por defecto: por eso se
-// seguían cortando las palabras en las uniones). Una página solo se ve
-// entera si su caja tiene la MISMA proporción que la imagen. Las
-// rebanadas del sitio no traen dimensiones en el HTML: se leen de los
-// primeros bytes de cada imagen (SOF del JPEG, IHDR del PNG, VP8 del
-// WebP, la cabecera del GIF) con kino.fetch + maxBytes, y se guardan en
-// kino.storage para no volver a medirlas. Kino acepta 60 peticiones por
-// llamada: se miden 50 por evento y las que falten las mide un
-// temporizador (dimsTick) mientras se lee. Patrón del lector de
-// Yuri Online, que funciona en este mismo teléfono.
-
-const DIMS_BATCH = 50;
-const DIMS_TOPE = 600;
-
-function deB64(s) {
-  const ABC = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const out = [];
-  let acc = 0, bits = 0;
-  for (let i = 0; i < s.length; i++) {
-    const v = ABC.indexOf(s.charAt(i));
-    if (v < 0) continue;
-    acc = (acc * 64) + v;
-    bits += 6;
-    if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 0xFF); acc = acc % Math.pow(2, bits); }
-  }
-  return out;
-}
-
-function dimsDeBytes(b) {
-  if (!Array.isArray(b) || b.length < 12) return null;
-  if (b[0] === 0xFF && b[1] === 0xD8) {
-    let i = 2;
-    while (i + 9 < b.length) {
-      if (b[i] !== 0xFF) { i++; continue; }
-      const m = b[i + 1];
-      if (m === 0x01 || (m >= 0xD0 && m <= 0xD9)) { i += 2; continue; }
-      const len = (b[i + 2] << 8) | b[i + 3];
-      if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) {
-        return { w: (b[i + 7] << 8) | b[i + 8], h: (b[i + 5] << 8) | b[i + 6] };
-      }
-      if (m === 0xDA) break;
-      i += 2 + len;
-    }
-    return null;
-  }
-  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) {
-    return { w: (b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19],
-      h: (b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23] };
-  }
-  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) {
-    return { w: b[6] | (b[7] << 8), h: b[8] | (b[9] << 8) };
-  }
-  if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
-      b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) {
-    const tag = String.fromCharCode(b[12], b[13], b[14], b[15]);
-    if (tag === "VP8X" && b.length > 29) {
-      return { w: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)),
-        h: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)) };
-    }
-    if (tag === "VP8 " && b.length > 29 && b[23] === 0x9D && b[24] === 0x01 && b[25] === 0x2A) {
-      return { w: b[26] | (b[27] << 8), h: b[28] | (b[29] << 8) };
-    }
-    if (tag === "VP8L" && b.length > 25 && b[20] === 0x2F) {
-      const v = b[21] | (b[22] << 8) | (b[23] << 16) | (b[24] << 24);
-      return { w: 1 + (v & 0x3FFF), h: 1 + ((v >>> 14) & 0x3FFF) };
-    }
-    return null;
-  }
-  return null;
-}
-
-function hashUrl(u) {
-  let h = 5381;
-  for (let i = 0; i < u.length; i++) h = ((h * 33) + u.charCodeAt(i)) >>> 0;
-  return ("0000000" + h.toString(16)).slice(-8);
-}
-
-function dimsTodas() { return getJson("dims", {}); }
-
-function dimPut(nuevos) {
-  try {
-    const all = dimsTodas();
-    for (let i = 0; i < nuevos.length; i++) all[nuevos[i][0]] = nuevos[i][1];
-    const ks = Object.keys(all);
-    if (ks.length > DIMS_TOPE) {
-      for (let i = 0; i < ks.length - DIMS_TOPE; i++) delete all[ks[i]];
-    }
-    setJson("dims", all);
-  } catch (e) { log("dims: " + e); }
-}
-
-async function dimsDeImagen(url) {
-  try {
-    const r = await kino.fetch(url, { maxBytes: 16384, timeoutMs: 5000 });
-    if (!r.ok) return null;
-    const d = dimsDeBytes(deB64(r.base64()));
-    return d && d.w > 0 && d.h > 0 ? d : null;
-  } catch (e) { return null; }
-}
-
-// Mide hasta DIMS_BATCH páginas sin dimensiones (el caché primero) y
-// guarda las nuevas. Devuelve cuántas quedan medidas en total.
-async function medirImagenes(images, presupuesto) {
-  const t0 = Date.now();
-  const cache = dimsTodas();
-  const pend = [];
-  let listas = 0;
-  for (let i = 0; i < images.length; i++) {
-    const im = images[i];
-    if (im.w > 0 && im.h > 0) { listas++; continue; }
-    const c = cache[hashUrl(im.url)];
-    if (Array.isArray(c) && c[0] > 0 && c[1] > 0) { im.w = c[0]; im.h = c[1]; listas++; continue; }
-    pend.push(im);
-  }
-  const nuevas = [];
-  let hechas = 0;
-  for (let i = 0; i < pend.length && hechas < DIMS_BATCH; i += 12) {
-    if (Date.now() - t0 > (presupuesto || 9000)) break;
-    const fin = Math.min(pend.length, i + 12, i + DIMS_BATCH - hechas);
-    const lote = pend.slice(i, fin);
-    hechas += lote.length;
-    const rs = await Promise.all(lote.map((im) => dimsDeImagen(im.url).catch(() => null)));
-    for (let j = 0; j < lote.length; j++) {
-      const d = rs[j];
-      if (d) {
-        lote[j].w = d.w;
-        lote[j].h = d.h;
-        listas++;
-        nuevas.push([hashUrl(lote[j].url), [d.w, d.h]]);
-      }
-    }
-  }
-  if (nuevas.length) dimPut(nuevas);
-  log("dims: " + listas + " de " + images.length + " medidas");
-  return listas;
 }
 
 // ------------------------------------------------------------- interfaz
@@ -685,95 +547,61 @@ function detailTree(state) {
   };
 }
 
-// Escala de tamaños de Kino: un width/height fuera de esta escala se
-// descarta, ¡y con él el nodo entero! La caja se ajusta a la proporción
-// real de la página buscando el par de la escala más cercano.
-const SIZE_SCALE = [16, 24, 32, 40, 48, 64, 80, 96, 120, 160, 200, 240, 320, 400, 480, 560, 640];
-// La caja de una página: el par (w, h) de la escala con MENOR error de
-// proporción; entre las casi exactas (diferencia menor a 0.01) prefiere
-// la de mayor área. El Image de Kino SIEMPRE rellena su caja recortando
-// (cover): cuanto más cerca esté la caja de la proporción real, menos
-// borde se pierde. En un webtoon las rebanadas son cortes de una tira
-// continua y un globo puede cruzar la unión: cada píxel recortado de
-// más en la costura parte palabras. La escala es dispersa: algunas
-// proporciones no tienen par exacto (ej. 900×1300 → 400×560, recorte
-// de ~3%), muchas otras sí (900×1800 → 320×640, 800×2560 → 200×640,
-// exactas). La versión anterior usaba escalones de tolerancia y
-// prefería área: para algunas proporciones elegía cajas con más error
-// del necesario (hasta 12% en TV).
-function pageCaja(ratio, wMin, wMax, hMin, hMax) {
-  if (!isFinite(ratio) || ratio <= 0) return null;
-  let mejor = null;
-  for (const w of SIZE_SCALE) {
-    if (w > wMax || w < wMin) continue;
-    for (const h of SIZE_SCALE) {
-      if (h > hMax || h < hMin) continue;
-      const err = Math.abs(h / w - ratio) / ratio;
-      if (!mejor || err < mejor.err - 0.01 ||
-          (err < mejor.err + 0.01 && w * h > mejor.a)) {
-        mejor = { w: w, h: h, a: w * h, err: err };
-      }
-    }
+// ------------------------------------------------------------- lector
+// Tres modos: vertical continuo (webtoon), página a página de izquierda a
+// derecha (cómic) y de derecha a izquierda (manga). Las imágenes usan
+// fit:"width" (Kino les da la altura de su proporción real: ya no se miden
+// ni se recortan) y cada página va en un scroll con zoom (pellizco, doble
+// toque y arrastre). Requiere la Kino con Image.fit, scroll.zoom y
+// pages.reverse/progress.
+
+const MODOS = ["vertical", "ltr", "rtl"];
+const MODO_INFO = {
+  vertical: { icon: "arrow_forward", es: "Vertical continuo", en: "Continuous vertical" },
+  ltr: { icon: "arrow_forward", es: "Página a página →", en: "Page by page →" },
+  rtl: { icon: "arrow_back", es: "Página a página ← (manga)", en: "Page by page ← (manga)" },
+};
+
+function cfg() {
+  const c = getJson("cfg", {});
+  return { mode: c && MODOS.indexOf(c.mode) >= 0 ? c.mode : "vertical" };
+}
+function setCfg(c) {
+  setJson("cfg", c);
+  try { if (typeof kino.shared === "object" && kino.shared) kino.shared.set("cfg", c); }
+  catch (e) { log("sync cfg: " + e); }
+}
+function syncPullCfg() {
+  let sc = null;
+  try { if (typeof kino.shared === "object" && kino.shared) sc = kino.shared.get("cfg"); }
+  catch (e) { log("sync cfg: " + e); }
+  if (sc && typeof sc === "object" && MODOS.indexOf(sc.mode) >= 0 && !getJson("cfg", null)) {
+    setJson("cfg", { mode: sc.mode });
   }
-  return mejor ? { width: mejor.w, height: mejor.h, err: mejor.err } : null;
 }
 
-// Caja a ANCHO COMPLETO para páginas de manga tradicional: la más
-// ancha de la escala cuya altura más cercana dé un error de
-// proporción de 8% o menos. En páginas tradicionales ese recorte
-// pequeño solo toca el margen blanco del papel (invisible); en un
-// webtoon partiría palabras, y por eso pageNodes solo la usa cuando
-// el capítulo se detectó de páginas uniformes.
-function pageLlena(ratio, wCap) {
-  if (!isFinite(ratio) || ratio <= 0) return null;
-  const ws = SIZE_SCALE.filter((x) => x <= wCap).sort((a, b) => b - a);
-  for (let wi = 0; wi < ws.length; wi++) {
-    const w = ws[wi];
-    let mejorH = 0, mejorErr = 0;
-    for (const h of SIZE_SCALE) {
-      const err = Math.abs(h / w - ratio) / ratio;
-      if (mejorH === 0 || err < mejorErr) { mejorH = h; mejorErr = err; }
-    }
-    if (mejorErr <= 0.08) return { width: w, height: mejorH, err: mejorErr };
-  }
-  return null;
-}
-
-function pageNodes(p, i, ratioGuia, llena) {
-  const url = typeof p === "string" ? p : p.url;
-  const w = (p && p.w) || 0, h = (p && p.h) || 0;
-  // Sin dimensiones propias usa la mediana del capítulo (las rebanadas
-  // de un webtoon comparten ancho): caja provisional cercana mientras
-  // dimsTick mide esta página, en vez de la caja plana por defecto.
-  const ratio = w > 0 && h > 0 ? h / w : (ratioGuia || 0);
-  const node = {
-    type: "Image", key: "p" + i, url: url,
+function paginaImagen(url, i) {
+  return {
+    type: "Image", key: "p" + i, url: url, fit: "width", aspect: "2:3",
     alt: "Página " + (i + 1), altEn: "Page " + (i + 1),
     fallback: { type: "Column", padding: 16, children: [
       { type: "Text", text: "Página " + (i + 1), textEn: "Page " + (i + 1), color: "muted" } ] },
   };
-  if (ratio > 0) {
-    let small = pageCaja(ratio, 80, 400, 96, 640);
-    let big = pageCaja(ratio, 240, 640, 320, 640);
-    const alt = pageCaja(ratio, 120, 640, 200, 640);
-    if (alt && big && alt.err < big.err - 0.005) big = alt;
-    // Capítulo de páginas uniformes: a ancho completo; el recorte
-    // pequeño solo toca el margen blanco del papel.
-    if (llena) {
-      const sL = pageLlena(ratio, 400);
-      const bL = pageLlena(ratio, 640);
-      if (sL) small = sL;
-      if (bL) big = bL;
-    }
-    if (small && big) {
-      node.width = { compact: small.width, medium: big.width, expanded: big.width };
-      node.height = { compact: small.height, medium: big.height, expanded: big.height };
-      return [node];
-    }
-  }
-  node.width = { compact: 400, medium: 400, expanded: 480 };
-  node.height = { compact: 560, medium: 560, expanded: 640 };
-  return [node];
+}
+
+// Lo que se ve al terminar el capítulo: seguir con el siguiente o volver.
+function finCapitulo(ch, hasNext) {
+  const kids = [
+    { type: "Icon", name: "check", color: "muted" },
+    { type: "Text", text: "Fin del capítulo " + (ch ? ch.num : ""),
+      textEn: "End of chapter " + (ch ? ch.num : ""), style: "h3" },
+  ];
+  if (hasNext) kids.push({ type: "ElevatedButton", icon: "arrow_forward", key: "finNext",
+    labelText: "Capítulo siguiente", labelTextEn: "Next chapter", onPressed: "nextChap" });
+  else kids.push({ type: "Text", text: "Estás al día con esta serie.", textEn: "You are up to date.", color: "muted" });
+  kids.push({ type: "TextButton", key: "finBack", labelText: "Volver a la serie", labelTextEn: "Back to the series",
+    onPressed: { event: "popBack" } });
+  return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: kids };
 }
 
 function readerTree(state) {
@@ -794,52 +622,53 @@ function readerTree(state) {
   const hasNext = idx + 1 < chapters.length;
   const hasPrev = idx > 0;
   const chKey = ch ? String(ch.num).replace(/[^a-z0-9]/gi, "") : String(idx);
-  const scrollKey = "pages-" + idx + "-" + chKey + "-" + (r.tk || 0);
-  const medidas = r.images.filter((p) => p && p.w > 0 && p.h > 0).map((p) => p.h / p.w);
-  medidas.sort((a, b) => a - b);
-  const ratioGuia = medidas.length ? medidas[parseInt((medidas.length - 1) / 2, 10)] : 0;
-  // Capítulo de páginas normales (manga tradicional, no webtoon): la
-  // MEDIANA debe ser de página común (0.5 a 1.7) y el 80% de las
-  // proporciones medidas debe caer a ±0.25 de esa mediana, para que
-  // una portada o doble página rara NO desactive el ancho completo
-  // (la regla anterior usaba el rango entero min-max y una sola página
-  // distinta bastaba). Los webtoones cortan sus tiras a alturas muy
-  // variadas (2.0-3.5) y no pasan la regla: siguen con cajas exactas
-  // para no partir palabras en las costuras.
-  const alrededor = medidas.filter((x) => Math.abs(x - ratioGuia) <= 0.25).length;
-  const llena = medidas.length >= 3 && ratioGuia >= 0.5 && ratioGuia <= 1.7 &&
-    alrededor >= medidas.length * 0.8;
-  const pageCol = { type: "Column", gap: 0, crossAxisAlignment: "center",
-    children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia, llena)) };
-  const body = [
-    { type: "SingleChildScrollView", key: scrollKey, flex: 1, children: [pageCol] },
-    { type: "Row", key: "barraLector", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
-      { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
-        onPressed: "prevChap", enabled: hasPrev },
-      { type: "DropdownButton", key: "jumpChap", labelText: "Ir a capítulo", labelTextEn: "Go to chapter",
-        value: String(idx), onChanged: "jumpChap",
-        options: chapters.length ? chapters.map((c, i) => ({ value: String(i), label: "Capítulo " + c.num })) : [{ value: "0", label: "—" }] },
-      { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
-        labelTextEn: hasNext ? "Next" : "Last chapter",
-        icon: "arrow_forward", onPressed: "nextChap", enabled: hasNext },
-      { type: "Text", text: "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · "
-          + medidas.length + " pág · mediana " + (Math.round(ratioGuia * 100) / 100)
-          + " · " + (llena ? "ancho completo" : "cajas exactas"),
-        style: "caption", color: "muted" },
-    ] },
-  ];
-  const raiz = {
+  const modo = r.images.length < 2 ? "vertical" : cfg().mode;
+  const tk = idx + "-" + chKey + "-" + (r.tk || 0) + "-" + modo;
+  const imgs = r.images.slice(0, 249);
+  const info = MODO_INFO[modo];
+
+  let lector;
+  if (modo === "vertical") {
+    lector = { type: "SingleChildScrollView", key: "pages-" + tk, flex: 1, zoom: true, onScroll: "scrolled", children: [
+      { type: "Column", gap: 0, crossAxisAlignment: "center", children:
+        imgs.map((p, i) => paginaImagen(p.url, i)).concat([finCapitulo(ch, hasNext)]) } ] };
+  } else {
+    const paginas = imgs.map((p, i) => ({
+      type: "SingleChildScrollView", key: "z" + i + "-" + tk, zoom: true,
+      children: [{ type: "Column", crossAxisAlignment: "center", children: [paginaImagen(p.url, i)] }],
+    }));
+    paginas.push({ type: "Column", key: "fin-" + tk, mainAxisAlignment: "center", children: [finCapitulo(ch, hasNext)] });
+    lector = { type: "pages", key: "pgs", flex: 1, reverse: modo === "rtl", progress: "bar",
+      children: paginas, onPageChanged: "pageChanged" };
+  }
+
+  const barra = { type: "Row", key: "barraLector", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
+    { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
+      onPressed: "prevChap", enabled: hasPrev },
+    { type: "DropdownButton", key: "jumpChap", labelText: "Ir a capítulo", labelTextEn: "Go to chapter",
+      value: String(idx), onChanged: "jumpChap",
+      options: chapters.length ? chapters.map((c, i) => ({ value: String(i), label: "Capítulo " + c.num })) : [{ value: "0", label: "—" }] },
+    { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
+      labelTextEn: hasNext ? "Next" : "Last chapter",
+      icon: "arrow_forward", onPressed: "nextChap", enabled: hasNext },
+  ] };
+
+  return {
     type: "Scaffold",
-    every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
-    appBar: { type: "AppBar", key: "barReader", title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
+    appBar: { type: "AppBar", key: "barReader", title: ch ? "Capítulo " + ch.num : "Leyendo",
+      titleEn: ch ? "Chapter " + ch.num : "Reading",
       leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
-      actions: [{ type: "IconButton", key: "verBarra", icon: "visibility",
-        labelText: "Ocultar o mostrar controles", labelTextEn: "Hide or show controls",
-        onPressed: { ui: [{ toggle: "barraLector" }] } }] },
-    body: { type: "Column", children: body },
+      actions: [
+        { type: "IconButton", key: "modoLector", icon: info.icon,
+          labelText: "Modo de lectura: " + info.es, labelTextEn: "Reading mode: " + info.en,
+          onPressed: "cycleMode" },
+        { type: "IconButton", key: "verBarra", icon: "visibility",
+          labelText: "Ocultar o mostrar controles", labelTextEn: "Hide or show controls",
+          onPressed: { ui: [{ toggle: "barraLector" }] } },
+      ] },
+    body: { type: "Column", children: [lector, barra] },
   };
-  return raiz;
 }
 
 function searchTree(state) {
@@ -1015,6 +844,7 @@ export async function screenEvent(ev) {
     if (name === "open") {
       syncPullFavs();
       syncPullHist();
+      syncPullCfg();
       const r = ev.route || {};
       if (r.name === "detail") {
         const url = routeUrl(r);
@@ -1079,21 +909,23 @@ export async function screenEvent(ev) {
       if (!images.length) {
         return { toast: "No se pudieron leer las páginas de este capítulo." };
       }
-      images = images.map((x) => (typeof x === "string" ? { url: x } : x));
-      await medirImagenes(images, 9000);
-      const pend = images.filter((im) => !(im.w > 0 && im.h > 0)).length;
-      log("capítulo " + ch.num + " listo: " + images.length + " páginas, " + pend + " sin medir");
+      images = images.map((x) => (typeof x === "string" ? { url: x } : { url: x.url }));
+      log("capítulo " + ch.num + " listo: " + images.length + " páginas");
       // Historial: el último capítulo abierto de la serie (para
       // "Seguir leyendo", el botón "Continuar" y las marcas de leído).
       const h = hist();
-      h[d.url] = { url: ch.url, num: ch.num, idx: idx, ts: Date.now(),
+      // Volver al mismo capítulo retoma la página donde se quedó la persona.
+      const antes = h[d.url];
+      const page = antes && antes.idx === idx && antes.page > 0 ? Math.min(antes.page, images.length) : 0;
+      h[d.url] = { url: ch.url, num: ch.num, idx: idx, ts: Date.now(), page: page, pos: 0,
         title: (d.meta && d.meta.title) || "", poster: (d.meta && d.meta.poster) || "" };
       const hk = Object.keys(h);
       if (hk.length > 100) { hk.sort((a, b) => (h[b].ts || 0) - (h[a].ts || 0));
         for (let i = 100; i < hk.length; i++) delete h[hk[i]]; }
       setJson("hist", h);
       syncPushHist();
-      const resp = { state: { reader: { images: images, idx: idx, tk: Date.now(), pend: pend, fallos: 0 } } };
+      const resp = { state: { reader: { images: images, idx: idx, tk: Date.now() } } };
+      if (page > 0 && cfg().mode !== "vertical") resp.ui = [{ set: { key: "pgs", value: page } }];
       if (name === "read") resp.route = { push: "read" };
       return resp;
     }
@@ -1105,18 +937,27 @@ export async function screenEvent(ev) {
       return { state: { results: results, resultsQ: q },
         toast: results.length ? results.length + " resultados" : "Sin resultados" };
     }
-    if (name === "dimsTick") {
-      const r = state.reader;
-      if (!r || !Array.isArray(r.images) || !r.images.length || !(r.pend > 0)) return null;
-      const imgs = r.images.map((im) => ({ url: im.url, w: im.w || 0, h: im.h || 0 }));
-      const antes = imgs.filter((im) => im.w > 0 && im.h > 0).length;
-      await medirImagenes(imgs, 11000);
-      const despues = imgs.filter((im) => im.w > 0 && im.h > 0).length;
-      let pend = imgs.filter((im) => !(im.w > 0 && im.h > 0)).length;
-      const fallos = despues > antes ? 0 : (r.fallos || 0) + 1;
-      if (fallos >= 3) pend = 0;
-      log("dimsTick: " + pend + " pendientes, fallos " + fallos);
-      return { state: { reader: { images: imgs, idx: r.idx, tk: r.tk, pend: pend, fallos: fallos } } };
+    if (name === "cycleMode") {
+      const c = cfg();
+      c.mode = MODOS[(MODOS.indexOf(c.mode) + 1) % MODOS.length];
+      setCfg(c);
+      const info = MODO_INFO[c.mode];
+      return { state: { modeTk: Date.now() }, toast: info.es };
+    }
+    if (name === "pageChanged" || name === "scrolled") {
+      // Guarda hasta dónde llegó la persona (página o fracción del scroll).
+      const d = state.detail, r = state.reader;
+      const v = Number(ev.value);
+      if (!d || !r || !isFinite(v)) return null;
+      const h = hist();
+      const e = h[d.url];
+      if (!e || e.idx !== r.idx) return null;
+      if (name === "pageChanged") e.page = Math.max(0, Math.min(Math.floor(v), r.images.length));
+      else e.pos = Math.max(0, Math.min(v, 1));
+      e.ts = Date.now();
+      setJson("hist", h);
+      syncPushHist();
+      return null;
     }
     if (name === "fav") {
       const d = state.detail;

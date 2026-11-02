@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.5.0";
+const VERSION = "0.5.1";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -821,17 +821,20 @@ function readerTree(state) {
 
 // Cuadrícula de esqueletos con la forma de los resultados: se enseña al momento al buscar (una operación
 // local de Kino, sin llamar al plugin) y se oculta cuando llegan los resultados.
-function esqueletosBusqueda() {
+function esqueletosBusqueda(key) {
   const celda = (i) => ({ type: "Column", key: "sk" + i, gap: 8, children: [
     { type: "Skeleton", shape: "block", height: 200 },
     { type: "Skeleton", shape: "line", lines: 2 },
   ] });
-  return { type: "Column", key: "buscando", hidden: true, padding: 12, children: [
+  return { type: "Column", key: key || "buscando", hidden: true, padding: 12, children: [
     { type: "GridView", columns: { compact: 3, medium: 4, expanded: 6 }, gap: 12,
       children: [0, 1, 2, 3, 4, 5].map(celda) },
   ] };
 }
 
+// Las operaciones locales de un filtro o de «Cargar más»: esqueleto y botón ocupado al instante.
+const CAT_OCUPADO = [{ show: "catSkel" }, { hide: "catGrid" }];
+const CAT_LISTO = [{ hide: "catSkel" }, { show: "catGrid" }, { hide: "catSpin" }, { enable: "catMore" }];
 const BUSCAR = { ui: [{ show: "buscando" }, { hide: "resultados" }], event: "search" };
 
 function searchTree(state) {
@@ -850,7 +853,7 @@ function searchTree(state) {
           hintText: "P. ej. one piece", hintEn: "e.g. one piece",
           trailingIcon: "search", trailingLabel: "Buscar", trailingLabelEn: "Search",
           onSubmitted: BUSCAR, onTrailingTap: BUSCAR },
-        esqueletosBusqueda(),
+        esqueletosBusqueda("buscando"),
         { type: "Column", key: "resultados", children: [
           results
             ? (results.length ? gridOf(results, VACIO_BUSQUEDA) : VACIO_BUSQUEDA)
@@ -884,11 +887,16 @@ function catalogoUrl(cat, page) {
   return p;
 }
 
-function catDrop(label, key, opciones, valor, evento) {
-  return { type: "DropdownButton", key: key, labelText: label, labelTextEn: label,
-    value: valor || "", onChanged: evento,
-    options: opciones.map((o) => ({ value: o[0], label: o[1] })) };
+function catChips(label, labelEn, key, opciones, valor) {
+  return { type: "Column", gap: 4, children: [
+    { type: "Text", text: label, textEn: labelEn, style: "label", color: "muted", padding: 16 },
+    { type: "SingleChildScrollView", key: key + "Scroll", direction: "horizontal", padding: 16,
+      children: [{ type: "Chips", key: key, value: valor || "all", onChanged: { ui: CAT_OCUPADO, event: key },
+        options: opciones.map((o) => ({ value: o[0] || "all", label: o[1] })) }] },
+  ] };
 }
+
+function conListo(resp) { if (resp && typeof resp === "object") resp.ui = CAT_LISTO; return resp; }
 
 function catalogTree(c) {
   const items = Array.isArray(c.items) ? c.items : [];
@@ -901,23 +909,28 @@ function catalogTree(c) {
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
     body: { type: "SingleChildScrollView", key: "catBody", children: [{
-      type: "Column", children: [
-        { type: "Row", gap: 8, padding: 16, wrap: true, children: [
-          catDrop("Género", "catGenre", GENEROS, c.genre, "catGenre"),
-          catDrop("Tipo", "catType", TIPOS, c.type, "catType"),
-          catDrop("Estado", "catStatus", ESTADOS, c.status, "catStatus"),
-        ] },
+      type: "Column", gap: 8, children: [
+        catChips("Género", "Genre", "catGenre", GENEROS, c.genre),
+        catChips("Tipo", "Type", "catType", TIPOS, c.type),
+        catChips("Estado", "Status", "catStatus", ESTADOS, c.status),
         c.totalTxt ? { type: "Text", text: c.totalTxt + " en el catálogo",
           textEn: c.totalTxt + " in catalog", style: "caption", color: "muted", padding: 16 } : null,
-        items.length ? gridOf(items, VACIO_SERIES) :
-          { type: "Text", text: "Sin resultados con estos filtros.",
-            textEn: "No results with these filters.", color: "muted", padding: 16 },
-        items.length >= CAT_TOPE && total > CAT_TOPE ?
-          { type: "Text", text: "Mostrando " + CAT_TOPE + " series: afina los filtros para ver otras.",
-            textEn: "Showing " + CAT_TOPE + " series: narrow the filters to see others.",
-            style: "caption", color: "muted", padding: 16 } : null,
-        hayMas ? { type: "ElevatedButton", key: "catMore", icon: "expand_more",
-          labelText: "Cargar más", labelTextEn: "Load more", onPressed: "catMore" } : null,
+        esqueletosBusqueda("catSkel"),
+        { type: "Column", key: "catGrid", children: [
+          items.length ? gridOf(items, VACIO_SERIES) :
+            { type: "Text", text: "Sin resultados con estos filtros.",
+              textEn: "No results with these filters.", color: "muted", padding: 16 },
+          items.length >= CAT_TOPE && total > CAT_TOPE ?
+            { type: "Text", text: "Mostrando " + CAT_TOPE + " series: afina los filtros para ver otras.",
+              textEn: "Showing " + CAT_TOPE + " series: narrow the filters to see others.",
+              style: "caption", color: "muted", padding: 16 } : null,
+        ].filter(Boolean) },
+        hayMas ? { type: "Column", gap: 8, padding: 16, crossAxisAlignment: "center", children: [
+          { type: "ElevatedButton", key: "catMore", icon: "expand_more", radius: "full",
+            labelText: "Cargar más", labelTextEn: "Load more",
+            onPressed: { ui: [{ disable: "catMore" }, { show: "catSpin" }], event: "catMore" } },
+          { type: "CircularProgressIndicator", key: "catSpin", hidden: true },
+        ] } : null,
       ].filter(Boolean) }] },
   };
 }
@@ -1067,17 +1080,17 @@ export async function screenEvent(ev) {
     if (name === "catGenre" || name === "catType" || name === "catStatus") {
       const c = getJson("cat", {}) || {};
       const nuevo = { genre: c.genre || "", type: c.type || "", status: c.status || "" };
-      const v = String(ev.value || "");
+      const v = String(ev.value || "") === "all" ? "" : String(ev.value || "");
       if (name === "catGenre") nuevo.genre = v;
       else if (name === "catType") nuevo.type = v;
       else nuevo.status = v;
-      return await cargarCatalogo(nuevo, 1, false);
+      return conListo(await cargarCatalogo(nuevo, 1, false));
     }
     if (name === "catMore") {
       const c = getJson("cat", null);
       if (!c || !Array.isArray(c.items) || !c.items.length) return null;
-      return await cargarCatalogo({ genre: c.genre || "", type: c.type || "", status: c.status || "" },
-        (c.page || 1) + 1, false);
+      return conListo(await cargarCatalogo({ genre: c.genre || "", type: c.type || "", status: c.status || "" },
+        (c.page || 1) + 1, false));
     }
     if (name === "popBack") return { route: { pop: true } };
     if (name === "openSeries") {
@@ -1190,6 +1203,7 @@ export async function screenEvent(ev) {
     const fallo = { toast: "Algo falló (" + ((e && e.code) || "error") + ")." };
     // Una búsqueda que falla no deja el indicador de carga puesto.
     if (name === "search") fallo.ui = [{ hide: "buscando" }, { show: "resultados" }];
+    if (name === "catGenre" || name === "catType" || name === "catStatus" || name === "catMore") fallo.ui = CAT_LISTO;
     return fallo;
   }
 }

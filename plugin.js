@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.2.1";
+const VERSION = "0.3.0";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -539,7 +539,7 @@ function detailTree(state) {
   }
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barDetail", title: String(meta.title || "Serie").slice(0, 30),
+    appBar: { type: "AppBar", key: "barDetail", mergeWithKinoBar: true, title: String(meta.title || "Serie").slice(0, 30),
       leading: { type: "IconButton", key: "backFromDetail", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
@@ -557,9 +557,9 @@ function detailTree(state) {
 
 const MODOS = ["vertical", "ltr", "rtl"];
 const MODO_INFO = {
-  vertical: { icon: "arrow_forward", es: "Vertical continuo", en: "Continuous vertical" },
-  ltr: { icon: "arrow_forward", es: "Página a página →", en: "Page by page →" },
-  rtl: { icon: "arrow_back", es: "Página a página ← (manga)", en: "Page by page ← (manga)" },
+  vertical: { icon: "tune", es: "Vertical continuo", en: "Continuous vertical" },
+  ltr: { icon: "tune", es: "Página a página →", en: "Page by page →" },
+  rtl: { icon: "tune", es: "Página a página ← (manga)", en: "Page by page ← (manga)" },
 };
 
 function cfg() {
@@ -659,7 +659,7 @@ function readerTree(state) {
 
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barReader", title: ch ? "Capítulo " + ch.num : "Leyendo",
+    appBar: { type: "AppBar", key: "barReader", mergeWithKinoBar: true, title: ch ? "Capítulo " + ch.num : "Leyendo",
       titleEn: ch ? "Chapter " + ch.num : "Reading",
       leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
@@ -680,7 +680,10 @@ function searchTree(state) {
   const results = Array.isArray(state.results) ? state.results : null;
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barSearch", title: "Buscar manga", titleEn: "Search manga", actions: [] },
+    appBar: { type: "AppBar", key: "barSearch", mergeWithKinoBar: true, title: "Buscar manga", titleEn: "Search manga",
+      leading: { type: "IconButton", key: "backFromSearch", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
     body: { type: "SingleChildScrollView", key: "searchBody", children: [{
       type: "Column", children: [
         { type: "Form", key: "search", onSubmitted: "search", gap: 8, padding: 16, children: [
@@ -746,7 +749,7 @@ function catalogTree(c) {
   const hayMas = items.length < total && items.length < CAT_TOPE;
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barCatalog", title: "Catálogo · " + FUENTE,
+    appBar: { type: "AppBar", key: "barCatalog", mergeWithKinoBar: true, title: "Catálogo · " + FUENTE,
       leading: { type: "IconButton", key: "backFromCatalog", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
@@ -832,7 +835,9 @@ export async function screen(ev) {
   const body = await homeTree();
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barHome", title: "MangaTrack",
+    appBar: { type: "AppBar", key: "barHome", mergeWithKinoBar: true, title: "MangaTrack",
+      leading: { type: "IconButton", key: "closeHome", icon: "close",
+        labelText: "Cerrar", labelTextEn: "Close", onPressed: { close: true } },
       actions: [
         { type: "IconButton", icon: "search", key: "goSearch",
           labelText: "Buscar", labelTextEn: "Search", onPressed: { event: "goSearch" } },

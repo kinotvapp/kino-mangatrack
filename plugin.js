@@ -5,7 +5,7 @@
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.5.1";
+const VERSION = "0.6.0";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -366,12 +366,14 @@ function posterCard(it, prefix, rail) {
   if (rail) img.width = 120;
   // Tarjeta tonal con esquinas redondeadas (la portada va recortada a ellas); el título ocupa siempre
   // dos líneas de alto, así las tarjetas de una fila quedan iguales.
-  return {
+  const card = {
     type: "Card", key: serieKey(prefix, it.url), flush: true, variant: "filled", radius: "medium",
     onTap: { event: "openSeries", arg: it.url },
     children: [img, { type: "Text", text: String(it.title || ""), textEn: String(it.title || ""),
       style: "label", maxLines: 2, padding: 8, minH: 48 }],
   };
+  if (rail) card.width = 120;
+  return card;
 }
 function gridOf(items, vacio) {
   if (!items || !items.length) return vacio;
@@ -419,7 +421,7 @@ const HOME_FILAS = [
   { key: "finalizados", es: "Finalizados", en: "Completed", q: { status: "completed" } },
 ];
 const FILAS_TTL = 6 * 3600 * 1000;
-const FILA_CARTAS = 10;
+const FILA_CARTAS = 8;
 
 function filasCache() {
   const c = getJson("filas", null);
@@ -444,6 +446,15 @@ async function cargarFilasHome() {
   if (cambio) { c.ts = Date.now(); setJson("filas", c); }
   setJson("filasTry", Date.now());
   return cambio;
+}
+
+// ¿Faltan filas por cargar y no se ha intentado hace poco? (el temporizador del Home no depende del evento open)
+function filasPendientes() {
+  const c = filasCache();
+  const intento = getJson("filasTry", 0) || 0;
+  if (intento && Date.now() - intento < 60000) return false;
+  return HOME_FILAS.some((f) => !Array.isArray(c.rows[f.key]) || !c.rows[f.key].length) ||
+    Date.now() - (c.ts || 0) >= FILAS_TTL;
 }
 
 function filaHeader(f) {
@@ -522,7 +533,7 @@ async function homeTree() {
   const hh = hist();
   const hItems = Object.keys(hh).map((k) => ({ url: k, title: hh[k].title || "",
       poster: hh[k].poster || "", ts: hh[k].ts || 0 }))
-    .filter((x) => x.title).sort((a, b) => b.ts - a.ts).slice(0, 15);
+    .filter((x) => x.title).sort((a, b) => b.ts - a.ts).slice(0, 10);
   const railHist = hItems.length ? [
     { type: "Text", text: "Seguir leyendo", textEn: "Keep reading", style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: "railHist", direction: "horizontal", padding: 16,
@@ -553,7 +564,23 @@ async function homeTree() {
       ] },
   ];
   if (!populares.length && !recientes.length && !mixtas.length) return VACIO_SERIES;
+  // El último capítulo abierto, a lo grande, con «Continuar» (abre el lector donde se quedó) y «Ver serie».
+  const ult = hItems.length ? hItems[0] : null;
+  const hu = ult ? hh[ult.url] : null;
+  const hero = ult && hu ? [{
+    type: "heroCard", key: "heroUltimo", title: ult.title, titleEn: ult.title,
+    text: "Capítulo " + hu.num + (hu.page > 0 ? " · pág. " + (hu.page + 1) : ""),
+    textEn: "Chapter " + hu.num + (hu.page > 0 ? " · p. " + (hu.page + 1) : ""),
+    image: ult.poster || undefined,
+    buttons: [
+      { type: "ElevatedButton", key: "heroContinuar", icon: "play", labelText: "Continuar", labelTextEn: "Continue",
+        onPressed: { event: "continuarUltimo", arg: ult.url } },
+      { type: "TextButton", key: "heroSerie", labelText: "Ver serie", labelTextEn: "See series",
+        onPressed: { event: "openSeries", arg: ult.url } },
+    ],
+  }] : [];
   return { type: "SingleChildScrollView", key: "home", children: []
+    .concat(hero)
     .concat(railHist)
     .concat(railFavs)
     .concat(railOf("Populares en español", "Popular in Spanish", populares, "railPop", "p-"))
@@ -1009,6 +1036,36 @@ export async function home() {
   return rows;
 }
 
+// Abre el lector en el capítulo `idx` de la serie `d`: lee las páginas, guarda el historial y, con `push`,
+// empuja la pantalla del lector.
+async function abrirLector(d, idx, push) {
+  const ch = d.chapters[idx];
+  const html = await getHtml(ch.url);
+  let images = readerImages(html);
+  if (!images.length) {
+    return { toast: "No se pudieron leer las páginas de este capítulo." };
+  }
+  images = images.map((x) => (typeof x === "string" ? { url: x } : { url: x.url }));
+  log("capítulo " + ch.num + " listo: " + images.length + " páginas");
+  // Historial: el último capítulo abierto de la serie (para
+  // "Seguir leyendo", el botón "Continuar" y las marcas de leído).
+  const h = hist();
+  // Volver al mismo capítulo retoma la página donde se quedó la persona.
+  const antes = h[d.url];
+  const page = antes && antes.idx === idx && antes.page > 0 ? Math.min(antes.page, images.length) : 0;
+  h[d.url] = { url: ch.url, num: ch.num, idx: idx, ts: Date.now(), page: page, pos: 0,
+    title: (d.meta && d.meta.title) || "", poster: (d.meta && d.meta.poster) || "" };
+  const hk = Object.keys(h);
+  if (hk.length > 100) { hk.sort((a, b) => (h[b].ts || 0) - (h[a].ts || 0));
+    for (let i = 100; i < hk.length; i++) delete h[hk[i]]; }
+  setJson("hist", h);
+  syncPushHist();
+  const resp = { state: { reader: { images: images, idx: idx, tk: Date.now() } } };
+  if (page > 0 && cfg().mode !== "vertical") resp.ui = [{ set: { key: "pgs", value: page } }];
+  if (push) resp.route = { push: "read" };
+  return resp;
+}
+
 export async function screen(ev) {
   const state = (ev && ev.state) || {};
   const route = (ev && ev.route) || { name: "home" };
@@ -1031,6 +1088,7 @@ export async function screen(ev) {
   const body = await homeTree();
   return {
     type: "Scaffold",
+    every: filasPendientes() ? { ms: 1000, event: "cargarFilas" } : undefined,
     appBar: { type: "AppBar", key: "barHome", mergeWithKinoBar: true, dense: true, title: "MangaTrack",
       leading: { type: "IconButton", key: "closeHome", icon: "close",
         labelText: "Cerrar", labelTextEn: "Close", onPressed: { close: true } },
@@ -1111,31 +1169,7 @@ export async function screenEvent(ev) {
         idx = ((state.reader && state.reader.idx) || 0) + (name === "nextChap" ? 1 : -1);
       }
       if (idx < 0 || idx >= d.chapters.length) return null;
-      const ch = d.chapters[idx];
-      const html = await getHtml(ch.url);
-      let images = readerImages(html);
-      if (!images.length) {
-        return { toast: "No se pudieron leer las páginas de este capítulo." };
-      }
-      images = images.map((x) => (typeof x === "string" ? { url: x } : { url: x.url }));
-      log("capítulo " + ch.num + " listo: " + images.length + " páginas");
-      // Historial: el último capítulo abierto de la serie (para
-      // "Seguir leyendo", el botón "Continuar" y las marcas de leído).
-      const h = hist();
-      // Volver al mismo capítulo retoma la página donde se quedó la persona.
-      const antes = h[d.url];
-      const page = antes && antes.idx === idx && antes.page > 0 ? Math.min(antes.page, images.length) : 0;
-      h[d.url] = { url: ch.url, num: ch.num, idx: idx, ts: Date.now(), page: page, pos: 0,
-        title: (d.meta && d.meta.title) || "", poster: (d.meta && d.meta.poster) || "" };
-      const hk = Object.keys(h);
-      if (hk.length > 100) { hk.sort((a, b) => (h[b].ts || 0) - (h[a].ts || 0));
-        for (let i = 100; i < hk.length; i++) delete h[hk[i]]; }
-      setJson("hist", h);
-      syncPushHist();
-      const resp = { state: { reader: { images: images, idx: idx, tk: Date.now() } } };
-      if (page > 0 && cfg().mode !== "vertical") resp.ui = [{ set: { key: "pgs", value: page } }];
-      if (name === "read") resp.route = { push: "read" };
-      return resp;
+      return await abrirLector(d, idx, name === "read");
     }
     if (name === "search") {
       const q = String(typeof ev.value === "string" ? ev.value : (ev.value && ev.value.q) || "").trim();
@@ -1150,6 +1184,21 @@ export async function screenEvent(ev) {
       const f = HOME_FILAS.find((x) => x.key === String(ev.arg || ""));
       if (!f) return null;
       return await cargarCatalogo({ genre: f.q.genre || "", type: f.q.type || "", status: f.q.status || "" }, 1, true);
+    }
+    if (name === "continuarUltimo") {
+      const url = String(ev.arg || "");
+      const h = hist()[url];
+      if (!h || !/^[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/]$/i.test(url)) return null;
+      const serie = await cargarSerie(url, false);
+      if (!serie.state || !serie.state.detail) return serie;
+      const d = serie.state.detail;
+      const resp = await abrirLector(d, Math.max(0, Math.min(h.idx || 0, d.chapters.length - 1)), true);
+      if (resp.state) resp.state = Object.assign({}, serie.state, resp.state);
+      return resp;
+    }
+    if (name === "cargarFilas") {
+      await cargarFilasHome();
+      return { state: { homeTk: Date.now() } };
     }
     if (name === "toggleDesc") return { state: { descOpen: !(state.descOpen === true) } };
     if (name === "toggleOrden") {

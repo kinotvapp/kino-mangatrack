@@ -1,8 +1,9 @@
 {"id":"mangatrack",
 "name":"MangaTrack",
-"version":"0.7.1",
+"version":"0.7.2",
 "creator":"Susejing",
 "description":"Lee mangas en español en tu TV o teléfono, con zoom y tres modos de lectura (fuente: LeerCapitulo).",
+"icon":"icon.png",
 "apiVersion":19,
 "entry":"plugin.js",
 "hosts":[
